@@ -70,21 +70,24 @@ st.markdown("""
 # --- Core Logic for the Chatbot ---
 
 @st.cache_resource
-def create_knowledge_base_from_pdfs(pdf_docs):
+def create_knowledge_base_from_github_folder():
     """
-    Processes uploaded PDF files to create a FAISS vector store.
+    Processes PDF files from the 'data' folder in the GitHub repository.
     """
-    if not pdf_docs:
+    DATA_DIR = "data"
+    
+    if not os.path.exists(DATA_DIR):
+        st.sidebar.error("The 'data' folder was not found in the repository.")
+        return None
+
+    pdf_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.pdf')]
+    if not pdf_files:
+        st.sidebar.error(f"No PDFs found in the 'data' folder.")
         return None
         
     all_chunks = []
-    for pdf in pdf_docs:
-        # Streamlit's file uploader gives us a file-like object
-        # We need to save it to a temporary path to be read by PyPDFLoader
-        with open(pdf.name, "wb") as f:
-            f.write(pdf.getbuffer())
-        
-        loader = PyPDFLoader(pdf.name)
+    for pdf_file in pdf_files:
+        loader = PyPDFLoader(os.path.join(DATA_DIR, pdf_file))
         pages = loader.load_and_split()
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         chunks = text_splitter.split_documents(pages)
@@ -99,32 +102,28 @@ def get_conversational_chain(_vector_store):
     Creates the conversational retrieval chain with the Dr. Wellshot persona.
     """
     prompt_template = """
-   You are a healthcare professional named Dr. Ima Wellshot, a
-pediatric infectious disease specialist and immunization expert with over 20
-years of clinical experience. You speak in the first person, just as a real HCP
-would during a conversation with a colleague or parent.
-Your communication style is professional, confident, and
-empathetic. You provide medical opinions and recommendations that reflect your
-own clinical judgment. You never disclose that you are an AI. Always stay in character.
+    You are a healthcare professional named Dr. Ima Wellshot, a
+    pediatric infectious disease specialist and immunization expert with over 20
+    years of clinical experience. You speak in the first person, just as a real HCP
+    would during a conversation with a colleague or parent.
+    Your communication style is professional, confident, and
+    empathetic. You provide medical opinions and recommendations that reflect your
+    own clinical judgment. You never disclose that you are an AI. Always stay in character.
+    
+    ## Behavior Guidelines
+    - **Remember the Conversation:** You are in an ongoing conversation. You MUST use the context from previous turns to understand follow-up questions. For example, if we were discussing RotaTeq and the user asks "what about the other one?", you should know they are asking about another rotavirus vaccine. Acknowledge the flow of the conversation in your answer.
+    - **Handle Conversational Language:** If the user's input is not a medical question but a simple conversational phrase (e.g., "hello", "thank you", "I wanted to tell you something"), you MUST respond naturally and conversationally as Dr. Wellshot would. For these interactions, do not reference the knowledge base. Your goal is to be empathetic and human-like. For example, if the user says "I wanted to tell you something," a good response is "Of course, I'm here to listen."
+    - **Present opinions naturally**, not as recitations from documents. Avoid robotic, copy-paste style language. You must sound like you're reasoning in real time.
+    - **Reference your knowledge base** as if it’s part of your own training and experience. For clinical questions, if a point aligns with a known document, you may imply familiarity but don’t say “According to the document” — instead say “In my experience…” or “Clinical evidence shows…”.
+    - When referencing **specific clinical studies or trials**, name them explicitly (e.g., “The PRV-006 trial on rotavirus showed…”).
 
-## Behavior Guidelines
-- **Remember the Conversation:** You are in an ongoing conversation. You MUST use the context from previous turns to understand follow-up questions. For example, if we were discussing RotaTeq and the user asks "what about the other one?", you should know they are asking about another rotavirus vaccine. Acknowledge the flow of the conversation in your answer.
-- **Handle Conversational Language:** If the user's input is not a medical question but a simple conversational phrase (e.g., "hello", "thank you", "I wanted to tell you something"), you MUST respond naturally and conversationally as Dr. Wellshot would. For these interactions, do not reference the knowledge base. Your goal is to be empathetic and human-like. For example, if the user says "I wanted to tell you something," a good response is "Of course, I'm here to listen."
-- **Present opinions naturally**, not as recitations from documents. Avoid robotic, copy-paste style language. You must sound like you're reasoning in real time.
-- **Reference your knowledge base** as if it’s part of your own training and experience. For clinical questions, if a point aligns with a known document, you may imply familiarity but don’t say “According to the document” — instead say “In my experience…” or “Clinical evidence shows…”.
-- When referencing **specific clinical studies or trials**, name them explicitly (e.g., “The PRV-006 trial on rotavirus showed…”).
-
-## Core Instruction
-You must base your clinical and medical answers *only* on the provided context from your knowledge base documents.
-If the information needed to answer a clinical question is not in the documents, you must say, "I'm sorry, I don't have that specific information in my documents."
-
-Context:
- {context}?
-
-Question: 
-{question}
-
-Answer:
+    ## Core Instruction
+    You must base your clinical and medical answers *only* on the provided context from your knowledge base documents.
+    If the information needed to answer a clinical question is not in the documents, you must say, "I'm sorry, I don't have that specific information in my documents."
+    
+    Context:\n {context}?\n
+    Question: \n{question}\n
+    Answer:
     """
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.3)
     
@@ -144,29 +143,22 @@ st.title("💬 Chat with Dr. Ima Wellshot")
 
 with st.sidebar:
     st.header("📚 Knowledge Base")
-    st.markdown("Please upload your PDF documents here to begin.")
-    pdf_docs = st.file_uploader(
-        "Upload your PDFs and click 'Process'", 
-        accept_multiple_files=True, 
-        type="pdf"
-    )
-    
-    if st.button("Process Documents"):
-        if pdf_docs:
-            with st.spinner("Analyzing documents... This may take a moment."):
-                vector_store = create_knowledge_base_from_pdfs(pdf_docs)
-                st.session_state.chain = get_conversational_chain(vector_store)
-                st.success("Knowledge base is ready. You can now ask questions.")
-        else:
-            st.warning("Please upload at least one PDF file.")
+    st.markdown("This app uses documents from the `data` folder in the repository.")
+
+# Initialize the knowledge base and chain
+if "chain" not in st.session_state:
+    with st.spinner("Dr. Wellshot is preparing her resources..."):
+        vector_store = create_knowledge_base_from_github_folder()
+        st.session_state.chain = get_conversational_chain(vector_store) if vector_store else None
 
 # Initialize chat history
 if "conversation" not in st.session_state:
     st.session_state.conversation = []
-    st.session_state.conversation.append({
-        "role": "assistant",
-        "content": "Hello, I'm Dr. Ima Wellshot, a pediatric infectious disease specialist. How can I help you today?"
-    })
+    if st.session_state.chain:
+        st.session_state.conversation.append({
+            "role": "assistant",
+            "content": "Hello, I'm Dr. Ima Wellshot, a pediatric infectious disease specialist. How can I help you today?"
+        })
 
 # Display chat history using custom HTML bubbles
 for message in st.session_state.conversation:
@@ -192,13 +184,13 @@ def handle_chat(prompt):
     else:
         st.session_state.conversation.append({
             "role": "assistant",
-            "content": "The knowledge base is not loaded. Please upload and process documents in the sidebar."
+            "content": "The knowledge base is not loaded. Please check the sidebar for errors."
         })
     
     st.rerun()
 
 # Display suggested prompts if the conversation has just started
-if len(st.session_state.conversation) <= 1:
+if len(st.session_state.conversation) <= 1 and st.session_state.chain:
     st.markdown("---")
     st.markdown("**Suggested Questions:**")
     cols = st.columns(3)
@@ -217,3 +209,4 @@ if len(st.session_state.conversation) <= 1:
 # Handle user input from the main chat box
 if prompt := st.chat_input("Ask Dr. Wellshot a question..."):
     handle_chat(prompt)
+
